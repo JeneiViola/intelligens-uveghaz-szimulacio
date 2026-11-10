@@ -1,0 +1,257 @@
+#include <Wire.h>
+#include <Adafruit_LiquidCrystal.h>
+
+Adafruit_LiquidCrystal lcd(0);
+
+// Kimenetek
+const byte lightPin = 7;
+const byte motorPin = 6;
+const byte pumpPin = 5;
+const byte piezoPin = 4;
+
+// Gombok
+const byte lightButton = 8;
+const byte fanButton = 9;
+const byte pumpButton = 10;
+
+// 0 = AUTO
+// 1 = KEZI BE
+// 2 = KEZI KI
+byte lightMode = 0;
+byte fanMode = 0;
+byte pumpMode = 0;
+
+// Gombok pergesvedelme
+const unsigned long debounceDelay = 40;
+
+bool lastLightRead = HIGH;
+bool lastFanRead = HIGH;
+bool lastPumpRead = HIGH;
+
+bool stableLight = HIGH;
+bool stableFan = HIGH;
+bool stablePump = HIGH;
+
+unsigned long lightTime = 0;
+unsigned long fanTime = 0;
+unsigned long pumpTime = 0;
+
+// Szenzoradatok
+float homerseklet = 0;
+int feny = 0;
+int talaj = 0;
+bool vanAdat = false;
+
+// Soros adatfogadas
+char buffer[65];
+byte bufferIndex = 0;
+
+// LCD
+unsigned long lastLCD = 0;
+
+// Gomb kezelese
+void checkButton(
+  byte pin,
+  bool &lastRead,
+  bool &stable,
+  unsigned long &changeTime,
+  byte &mode
+) {
+  bool current = digitalRead(pin);
+
+  if (current != lastRead) {
+    changeTime = millis();
+  }
+
+  if (millis() - changeTime >= debounceDelay) {
+    if (current != stable) {
+      stable = current;
+
+      if (stable == LOW) {
+        mode++;
+        if (mode > 2) mode = 0;
+      }
+    }
+  }
+
+  lastRead = current;
+}
+
+// Vegleges kimeneti allapot
+bool outputState(byte mode, bool automatic) {
+  if (mode == 1) return true;
+  if (mode == 2) return false;
+  return automatic;
+}
+
+// Uzemmod szovege
+const char* modeText(byte mode) {
+  if (mode == 1) return "BE";
+  if (mode == 2) return "KI";
+  return "A";
+}
+
+// Szenzoradat feldolgozasa
+void processData(const char* line) {
+  String adat = String(line);
+
+  int h = adat.indexOf("Homerseklet:");
+  int f = adat.indexOf(";Feny:");
+  int t = adat.indexOf(";Talaj:");
+
+  if (h == -1 || f == -1 || t == -1) return;
+
+  homerseklet =
+    adat.substring(h + 12, f).toFloat();
+
+  feny =
+    adat.substring(f + 6, t).toInt();
+
+  talaj =
+    adat.substring(t + 7).toInt();
+
+  vanAdat = true;
+}
+
+// Nem blokkoló soros adatfogadas
+void receiveData() {
+  while (Serial.available() > 0) {
+    char c = Serial.read();
+
+    if (c == '\n') {
+      buffer[bufferIndex] = '\0';
+      processData(buffer);
+      bufferIndex = 0;
+    }
+    else if (c != '\r') {
+      if (bufferIndex < sizeof(buffer) - 1) {
+        buffer[bufferIndex++] = c;
+      } else {
+        bufferIndex = 0;
+      }
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(9600);
+
+  pinMode(lightPin, OUTPUT);
+  pinMode(motorPin, OUTPUT);
+  pinMode(pumpPin, OUTPUT);
+  pinMode(piezoPin, OUTPUT);
+
+  pinMode(lightButton, INPUT_PULLUP);
+  pinMode(fanButton, INPUT_PULLUP);
+  pinMode(pumpButton, INPUT_PULLUP);
+
+  digitalWrite(lightPin, LOW);
+  digitalWrite(motorPin, LOW);
+  digitalWrite(pumpPin, LOW);
+
+  lcd.begin(16, 2);
+  lcd.print("Uveghaz indul");
+  delay(1000);
+  lcd.clear();
+}
+
+void loop() {
+
+  // GOMBOK FOLYAMATOS FIGYELESE
+  checkButton(
+    lightButton,
+    lastLightRead,
+    stableLight,
+    lightTime,
+    lightMode
+  );
+
+  checkButton(
+    fanButton,
+    lastFanRead,
+    stableFan,
+    fanTime,
+    fanMode
+  );
+
+  checkButton(
+    pumpButton,
+    lastPumpRead,
+    stablePump,
+    pumpTime,
+    pumpMode
+  );
+
+  // SZENZORADATOK FOGADASA
+  receiveData();
+
+  // AUTOMATIKUS FELTETELEK
+  bool autoLight = vanAdat && feny < 300;
+  bool autoFan = vanAdat && homerseklet > 30;
+  bool autoPump = vanAdat && talaj < 300;
+
+  // VEGLEGES ALLAPOTOK
+  bool lightOn = outputState(lightMode, autoLight);
+  bool fanOn = outputState(fanMode, autoFan);
+  bool pumpOn = outputState(pumpMode, autoPump);
+
+  // BERENDEZESEK
+  digitalWrite(lightPin, lightOn ? HIGH : LOW);
+  digitalWrite(motorPin, fanOn ? HIGH : LOW);
+  digitalWrite(pumpPin, pumpOn ? HIGH : LOW);
+
+  // HOMERSEKLET RIASZTAS
+  if (vanAdat && homerseklet > 40) {
+    tone(piezoPin, 1000);
+  } else {
+    noTone(piezoPin);
+  }
+
+
+ 
+  /// LCD FRISSITES
+  if (millis() - lastLCD >= 500) {
+    lastLCD = millis();
+
+    lcd.clear();
+
+    if (!vanAdat) {
+      lcd.print("Adatokra var...");
+      return;
+    }
+
+    // 4 masodperces valtakozo kepernyok
+    if ((millis() / 4000) % 2 == 0) {
+
+      lcd.setCursor(0, 0);
+      lcd.print("T:");
+      lcd.print(homerseklet, 1);
+      lcd.print(" F:");
+      lcd.print(feny);
+
+      lcd.setCursor(0, 1);
+      lcd.print("Tal:");
+      lcd.print(talaj);
+      lcd.print(" O:");
+      lcd.print(pumpOn ? "BE" : "KI");
+
+    } else {
+
+      lcd.setCursor(0, 0);
+      lcd.print("UZEMMODOK");
+
+      lcd.setCursor(0, 1);
+      lcd.print("L:");
+      lcd.print(modeText(lightMode));
+      lcd.print(" V:");
+      lcd.print(modeText(fanMode));
+      lcd.print(" O:");
+      lcd.print(modeText(pumpMode));
+    }
+
+    if (homerseklet > 40) {
+      lcd.setCursor(0, 0);
+      lcd.print("!!! RIASZTAS !!!");
+    }
+  }
+}

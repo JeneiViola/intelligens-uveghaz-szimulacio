@@ -1,0 +1,26 @@
+
+const int tempPin = A0;
+const int lightPin = A1;
+const int soilPin = A2;
+
+void setup() {
+  Serial.begin(9600);
+}
+
+void loop() {
+  int tempValue = analogRead(tempPin);
+  int lightValue = analogRead(lightPin);
+  int soilValue = analogRead(soilPin);
+
+  float voltage = tempValue * (5.0 / 1023.0);
+  float temperature = (voltage - 0.5) * 100.0;
+
+  Serial.print("Homerseklet:");
+  Serial.print(temperature);
+  Serial.print(";Feny:");
+  Serial.print(lightValue);
+  Serial.print(";Talaj:");
+  Serial.println(soilValue);
+
+  delay(250);
+}
